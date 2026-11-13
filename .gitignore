@@ -1,0 +1,8 @@
+# xsim build / run output (tools/xsim/run_xsim.py)
+/RV32IM Out-of-Order/xsim/
+/RV32I Pipeline/xsim/
+__pycache__/
+# Vivado batch-mode droppings
+*.jou
+vivado*.log
+.Xil/

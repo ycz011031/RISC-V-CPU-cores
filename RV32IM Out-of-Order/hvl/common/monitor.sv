@@ -57,6 +57,8 @@ module monitor #(
                             `ifdef ECE411_VERILATOR
                                 // $dumpon();
                                 dump_on = 1'b1;
+                            `elsif ECE411_XSIM
+                                // no FSDB dumping on xsim (use run_xsim.py --wave)
                             `else
                                 $fsdbDumpon();
                             `endif
@@ -71,6 +73,8 @@ module monitor #(
                             `ifdef ECE411_VERILATOR
                                 // $dumpoff();
                                 dump_on = 1'b0;
+                            `elsif ECE411_XSIM
+                                // no FSDB dumping on xsim (use run_xsim.py --wave)
                             `else
                                 $fsdbDumpoff();
                             `endif

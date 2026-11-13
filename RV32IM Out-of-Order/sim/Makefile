@@ -3,21 +3,22 @@ SHELL=/bin/bash -o pipefail
 
 PKG_SRCS  := $(PWD)/../pkg/types.sv
 HDL_SRCS  := $(shell find $(PWD)/../hdl -name '*.sv')
+IP_SRCS   := $(shell find $(PWD)/../../ip -name '*.sv')
 COMM_HVL  := $(shell find $(PWD)/../hvl/common                -name '*.sv' -o -name '*.v' -o -name '*.o' -o -name '*.so')
 VCS_HVL   := $(COMM_HVL) $(shell find $(PWD)/../hvl/vcs       -name '*.sv' -o -name '*.v' -o -name '*.o' -o -name '*.so')
 VER_HVL   := $(COMM_HVL) $(shell find $(PWD)/../hvl/verilator -name '*.sv' -o -name '*.v' -o -name '*.o' -o -name '*.so' -o -name '*.cpp')
 SRAM_SRCS := $(shell find $(PWD)/../sram/output -name '*.v')
 HDRS      := $(shell find $(PWD)/../hvl -name '*.svh') $(PWD)/../hvl/common/rvfi_reference.json
 DW_IP     := $(shell python3 $(PWD)/../bin/get_options.py dw_ip)
-VCS_SRCS  := $(PKG_SRCS) $(HDL_SRCS) $(VCS_HVL) $(SRAM_SRCS) $(DW_IP)
-VER_SRCS  := $(PKG_SRCS) $(HDL_SRCS) $(VER_HVL) $(SRAM_SRCS) $(DW_IP)
+VCS_SRCS  := $(PKG_SRCS) $(IP_SRCS) $(HDL_SRCS) $(VCS_HVL) $(SRAM_SRCS) $(DW_IP)
+VER_SRCS  := $(PKG_SRCS) $(IP_SRCS) $(HDL_SRCS) $(VER_HVL) $(SRAM_SRCS) $(DW_IP)
 
 TIMEOUT   ?= 10000000
 
 ECE411_NO_FLOAT = $(shell python3 $(PWD)/../bin/get_options.py no_float)
 
 export VCS_ARCH_OVERRIDE=linux
-COMMON_FLAGS = +incdir+$(PWD)/../hvl/common  $(ECE411_NO_FLOAT) +define+DW_SUPPRESS_WARN +incdir+$(DW)/sim_ver #+define+ECE411_NO_SPIKE_DPI
+COMMON_FLAGS = +incdir+$(PWD)/../hvl/common  $(ECE411_NO_FLOAT) +define+USE_SYNOPSYS_DW +define+DW_SUPPRESS_WARN +incdir+$(DW)/sim_ver #+define+ECE411_NO_SPIKE_DPI
 VCS_FLAGS    = $(COMMON_FLAGS) +incdir+$(PWD)/../hvl/vcs -licqueue -full64 -lca -sverilog -timescale=1ps/1ps -debug_acc+all -kdb -suppress=LCA_FEATURES_ENABLED -msg_config=../vcs_warn.config -xprop=../xprop.config -xprop=flowctrl -assert svaext
 VER_FLAGS    = $(COMMON_FLAGS) +incdir+$(PWD)/../hvl/verilator -Wall --timescale 1ps/1ps -Mdir build -O3 -CFLAGS "-Ofast -march=native" --x-assign fast --x-initial fast --noassert --cc --exe ../verilator_warn.vlt --trace-fst --trace-structs --trace-max-array 1048576 --trace-max-width 1048576 +define+ECE411_VERILATOR
 

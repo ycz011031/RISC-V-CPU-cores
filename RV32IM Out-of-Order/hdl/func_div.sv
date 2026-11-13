@@ -57,6 +57,10 @@ assign rs2_inv    = (~rs2_v)+32'd1;
 assign quotient_inv = (~quotient)+32'd1;
 assign remainder_inv= (~remainder)+32'd1;
 
+// Synopsys DesignWare IP is only used when USE_SYNOPSYS_DW is defined.
+// Otherwise the vendor-neutral, port-compatible gen_div_seq (ip/gen_div_seq.sv)
+// is used: an implicit operator constrained as a multicycle path.
+`ifdef USE_SYNOPSYS_DW
 DW_div_seq #(
     .a_width(32),
     .b_width(32),
@@ -78,6 +82,29 @@ DW_div_seq #(
     .quotient,
     .remainder
 );
+`else
+gen_div_seq #(
+    .a_width(32),
+    .b_width(32),
+    .tc_mode(0),
+    .num_cyc(17),
+    .rst_mode(1),
+    .input_mode(1),
+    .output_mode(1),
+    .early_start(0)
+)u_gen_div_seq(
+    .clk,
+    .rst_n,
+    .hold(div_hold),
+    .start(div_en),
+    .a(a_mul),
+    .b(b_mul),
+    .complete(div_complete),
+    .divide_by_0(div_0),
+    .quotient,
+    .remainder
+);
+`endif
 
 always_ff @(posedge clk) begin
     if (rst||flush) begin

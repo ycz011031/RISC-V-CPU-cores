@@ -5,6 +5,7 @@ import rv32i_types::*;
     input   logic           rst,
 
     input   logic   [2:0]   funct3, 
+    input   logic   [6:0]   funct7,
     input   logic   [6:0]   opcode,
     
     input   logic           decode_rdy,
@@ -54,6 +55,24 @@ logic [31:0] rs2_v_sync;
 logic [31:0] rs1_v_sync;
 
 logic [31:0] MM_addr_sync;
+
+// ---------------------------------------------------------------------------
+// RV32M: MUL/DIV ops are handled like loads whose "memory" is m_unit. They
+// issue in the slot where a load would issue its dmem request, then the
+// memory stage waits for m_done the way it waits for dmem_resp (same
+// mm_stall / replay path). resp_any merges the two response sources (only
+// one op can be outstanding at a time).
+// ---------------------------------------------------------------------------
+logic        is_m_ex;      // M op in the execute slot (decode register)
+logic        m_cache;      // M op outstanding in the memory stage
+logic        m_start;
+logic        m_done;
+logic [31:0] m_result;
+logic        resp_any;
+
+assign is_m_ex  = (opcode == op_b_reg) && (funct7 == muldiv);
+assign resp_any = dmem_resp | m_done;
+
 //stage 1
 
 assign rs1_v_sync = rs_valid_ex[0] ? rs1_fw_ex : rs1_v_de;
@@ -61,22 +80,38 @@ assign rs2_v_sync = rs_valid_ex[1] ? rs2_fw_ex : rs2_v_de;
 
 assign MM_addr_sync = rs1_v_sync + imm_de;
 
+assign m_start = decode_rdy && !br_flush && !mm_stall && is_m_ex;
+
+m_unit m_unit (
+    .clk    (clk),
+    .rst    (rst),
+    .start  (m_start),
+    .funct3 (funct3),
+    .rs1_v  (rs1_v_sync),
+    .rs2_v  (rs2_v_sync),
+    .done   (m_done),
+    .result (m_result)
+);
+
 
 always_ff @ (posedge clk)begin
     if (rst) begin
         funct3_cache <= '0;
         opcode_cache <= '0;
+        m_cache      <= '0;
         addr_cache   <= '0;
         resp_latch   <= '1;
     end else if (br_flush)begin
         opcode_cache <= '0;
+        m_cache      <= '0;
     end else if (decode_rdy && !mm_stall) begin
         funct3_cache <= funct3;
         opcode_cache <= opcode;
+        m_cache      <= is_m_ex;
         addr_cache   <= MM_addr_sync;
-        if (opcode == op_b_store | opcode == op_b_load)resp_latch   <= '0;
+        if (opcode == op_b_store | opcode == op_b_load | is_m_ex)resp_latch   <= '0;
     end 
-    if((dmem_resp|br_flush)&& !((opcode == op_b_store | opcode == op_b_load)&&decode_rdy)) begin
+    if((resp_any|br_flush)&& !((opcode == op_b_store | opcode == op_b_load | is_m_ex)&&decode_rdy)) begin
         resp_latch   <= '1;
     end
 end
@@ -135,6 +170,10 @@ always_ff @ (posedge clk) begin
         mm_rdy_reg  <= '0;
         rd_v_mm <= '0;
         rd_s_mm <= '0;
+    end else if (m_cache) begin
+        if(!resp_latch&&execute_rdy)rd_s_mm  <= rd_s_ex;
+        if (m_done) rd_v_mm <= m_result;
+        else        rd_v_mm <= '0;
     end else if (opcode_cache == op_b_store) begin
         rd_v_mm  <= '0;
         rd_s_mm  <= '0;
@@ -164,8 +203,8 @@ always_ff @ (posedge clk) begin
 end
 
 always_comb begin
-    if (opcode_cache == op_b_load || opcode_cache == op_b_store || !mm_rdy)begin
-        mm_stall = (~dmem_resp)&(~resp_latch);
+    if (opcode_cache == op_b_load || opcode_cache == op_b_store || m_cache || !mm_rdy)begin
+        mm_stall = (~resp_any)&(~resp_latch);
     end
     else begin  
         mm_stall = '0;
@@ -173,8 +212,8 @@ always_comb begin
 end
 
 always_ff @ (posedge clk)begin
-    if (opcode_cache == op_b_load || opcode_cache == op_b_store || !resp_latch)begin
-        mm_rdy <= dmem_resp;
+    if (opcode_cache == op_b_load || opcode_cache == op_b_store || m_cache || !resp_latch)begin
+        mm_rdy <= resp_any;
     end
     else mm_rdy <= execute_rdy;
 end

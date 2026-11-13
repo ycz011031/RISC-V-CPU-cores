@@ -99,25 +99,34 @@ import rv32i_types::*;
         else begin
             for (integer i = '0; i < DEPTH; i++) begin
                 if (entry_valid[i]) begin
+                    // Wakeup is applied to a copy and written back as one whole-element
+                    // NBA. Same behavior as per-field NBAs, but Vivado xsim can drop
+                    // field-select NBAs into unpacked arrays of structs.
+                    automatic RS_entry_t e = RS_entry[i];
+                    automatic rvfi_entry r = rvfi_entry_reg[i];
                     if (rs1_cdb1_forwarding[i]) begin
-                        RS_entry[i].rs1_valid   <= 1'b1;
-                        RS_entry[i].rs1_data    <= cdb_1.rd_data;
-                        rvfi_entry_reg[i].rs1_rdata <= cdb_1.rd_data;
+                        e.rs1_valid   = 1'b1;
+                        e.rs1_data    = cdb_1.rd_data;
+                        r.rs1_rdata = cdb_1.rd_data;
                     end
                     if (rs2_cdb1_forwarding[i]) begin
-                        RS_entry[i].rs2_valid   <= 1'b1;
-                        RS_entry[i].rs2_data    <= cdb_1.rd_data;
-                        rvfi_entry_reg[i].rs2_rdata <= cdb_1.rd_data;
+                        e.rs2_valid   = 1'b1;
+                        e.rs2_data    = cdb_1.rd_data;
+                        r.rs2_rdata = cdb_1.rd_data;
                     end
                     if (rs1_cdb2_forwarding[i]) begin
-                        RS_entry[i].rs1_valid   <= 1'b1;
-                        RS_entry[i].rs1_data    <= cdb_2.rd_data;
-                        rvfi_entry_reg[i].rs1_rdata <= cdb_2.rd_data;
+                        e.rs1_valid   = 1'b1;
+                        e.rs1_data    = cdb_2.rd_data;
+                        r.rs1_rdata = cdb_2.rd_data;
                     end
                     if (rs2_cdb2_forwarding[i]) begin
-                        RS_entry[i].rs2_valid   <= 1'b1;
-                        RS_entry[i].rs2_data    <= cdb_2.rd_data;
-                        rvfi_entry_reg[i].rs2_rdata <= cdb_2.rd_data;
+                        e.rs2_valid   = 1'b1;
+                        e.rs2_data    = cdb_2.rd_data;
+                        r.rs2_rdata = cdb_2.rd_data;
+                    end
+                    if (rs1_cdb1_forwarding[i] || rs2_cdb1_forwarding[i] || rs1_cdb2_forwarding[i] || rs2_cdb2_forwarding[i]) begin
+                        RS_entry[i]       <= e;
+                        rvfi_entry_reg[i] <= r;
                     end
                 end
             end

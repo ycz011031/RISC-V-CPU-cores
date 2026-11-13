@@ -56,6 +56,10 @@ assign rs1_inv    = (~rs1_v)+32'd1;
 assign rs2_inv    = (~rs2_v)+32'd1;
 assign result_inv = (~mul_result)+32'd1;
 
+// Synopsys DesignWare IP is only used when USE_SYNOPSYS_DW is defined.
+// Otherwise the vendor-neutral, port-compatible gen_mult_seq (ip/gen_mult_seq.sv)
+// is used: an implicit operator constrained as a multicycle path.
+`ifdef USE_SYNOPSYS_DW
 DW_mult_seq #(.a_width(32), 
                .b_width(32), 
                .tc_mode(0),
@@ -75,6 +79,27 @@ DW_mult_seq #(.a_width(32),
                 .complete(mul_complete),
                 .product(mul_result)
                );
+`else
+gen_mult_seq #(.a_width(32), 
+               .b_width(32), 
+               .tc_mode(0),
+               .num_cyc(5), 
+               .rst_mode(1),
+               .input_mode(1),
+               .output_mode(1),
+               .early_start(1)         
+               ) 
+               u_gen_mult_seq(
+                .clk,
+                .rst_n,
+                .hold(mul_hold),
+                .start(mul_en),
+                .a(a_mul),
+                .b(b_mul),
+                .complete(mul_complete),
+                .product(mul_result)
+               );
+`endif
 
 always_ff @(posedge clk) begin
     if (rst||flush) begin

@@ -47,6 +47,11 @@ logic        lu_flag;
 assign br_target = PC_cur + {{20{imem_rdata[31]}}, imem_rdata[7], imem_rdata[30:25], imem_rdata[11:8], 1'b0};
 assign jal_target = PC_cur + {{12{imem_rdata[31]}}, imem_rdata[19:12], imem_rdata[20], imem_rdata[30:21], 1'b0};
 
+// RV32M ops complete in the memory stage like loads (m_unit is the "memory"),
+// so they get the same load-use bubble and the same stall-replay bookkeeping.
+logic is_muldiv;
+assign is_muldiv = (imem_rdata[6:0] == op_b_reg) && (imem_rdata[31:25] == muldiv);
+
 always_comb begin
     if (imem_rdata[6:0]==op_b_jal && imem_resp)jump_flag = '1;
     else jump_flag = '0;
@@ -140,7 +145,7 @@ always_ff @ (posedge clk) begin
             if (imem_resp) begin 
                 if (! branch_latch) inst      <= imem_rdata;
                 //Set Load flag & cache load destination
-                if (imem_rdata[6:0] == op_b_load) begin
+                if (imem_rdata[6:0] == op_b_load || is_muldiv) begin
                     load_flag <= '1;
                     load_rd   <= imem_rdata[11:7];
                 end
@@ -219,7 +224,7 @@ always_ff @ (posedge clk) begin
             PC_cur    <= PC_cur;
             PC_next   <= PC_next;
         end
-        else if (imem_rdata[6:0] == op_b_store || imem_rdata[6:0] == op_b_load) begin
+        else if (imem_rdata[6:0] == op_b_store || imem_rdata[6:0] == op_b_load || is_muldiv) begin
             dm_source[0] <= PC_next;
             PC_cur       <= PC_next;
             PC_next      <= PC_next + 4; 

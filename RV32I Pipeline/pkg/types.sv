@@ -82,8 +82,21 @@ package rv32i_types;
 
     typedef enum logic [6:0] {
         base           = 7'b0000000,
-        variant        = 7'b0100000
+        variant        = 7'b0100000,
+        muldiv         = 7'b0000001  // RV32M (opcode op_b_reg)
     } funct7_t;
+
+    // RV32M funct3 (opcode op_b_reg, funct7 muldiv)
+    typedef enum logic [2:0] {
+        m_f3_mul       = 3'b000,
+        m_f3_mulh      = 3'b001,
+        m_f3_mulhsu    = 3'b010,
+        m_f3_mulhu     = 3'b011,
+        m_f3_div       = 3'b100,
+        m_f3_divu      = 3'b101,
+        m_f3_rem       = 3'b110,
+        m_f3_remu      = 3'b111
+    } m_f3_t;
 
     typedef union packed {
         logic [31:0] word;

@@ -164,6 +164,7 @@ import rv32i_types::*;
         .rst(rst),
 
         .funct3(funct3),
+        .funct7(funct7),
         .opcode(opcode),
 
         .decode_rdy(decode_rdy),
