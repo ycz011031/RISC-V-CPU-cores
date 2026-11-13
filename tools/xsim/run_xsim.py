@@ -53,12 +53,13 @@ CORES = {
     },
     "pipeline": {
         "root": "RV32I Pipeline",
-        "word_bytes": 4,            # 32-bit instruction/data memory
+        "word_bytes": 32,           # same banked DRAM model as the OoO core
         "clock_ps": 2000,
         "src_globs": [
             "pkg/types.sv",
             "@ip/*.sv",
             "hdl/*.sv",
+            "sram/output/*/*.v",
             "hvl/common/*.sv",
             "hvl/common/*.v",
             "hvl/xsim/*.sv",
@@ -66,7 +67,7 @@ CORES = {
     },
 }
 
-DEFINES = ["ECE411_XSIM", "ECE411_NO_FLOAT", "ECE411_NO_SPIKE_DPI"]
+DEFINES = ["ECE411_XSIM", "ECE411_NO_FLOAT", "ECE411_NO_SPIKE_DPI", "ECE411_PERF"]
 
 
 def find_vivado_bin(user_path):
@@ -133,6 +134,9 @@ def main():
     ap.add_argument("--timeout", type=int, default=50_000_000, help="timeout in cycles")
     ap.add_argument("--clock", type=int, help="clock period in ps")
     ap.add_argument("--wave", action="store_true", help="record all signals to a .wdb")
+    ap.add_argument("--magic", action="store_true",
+                    help="magic memory (no DRAM timing) instead of the DRAM model; "
+                         "builds in <core>/xsim_magic")
     ap.add_argument("--no-compile", action="store_true", help="reuse the existing snapshot")
     ap.add_argument("--debug", action="store_true",
                     help="elaborate with signal visibility (implied by --wave / --tcl)")
@@ -147,7 +151,10 @@ def main():
 
     cfg = CORES[args.core]
     core_dir = os.path.join(REPO, cfg["root"])
-    build = os.path.abspath(args.build_dir or os.path.join(core_dir, "xsim"))
+    if args.magic:
+        args.define.append("ECE411_MAGIC_MEM")
+    build = os.path.abspath(args.build_dir or
+                            os.path.join(core_dir, "xsim_magic" if args.magic else "xsim"))
     run_dir = os.path.join(build, "run")
     os.makedirs(run_dir, exist_ok=True)
     os.makedirs(os.path.join(build, "spike"), exist_ok=True)   # monitor writes ../spike/commit.log
@@ -229,7 +236,7 @@ def main():
     rc, out, dt = run(cmd, run_dir, "simulation.log", echo=False)
 
     # ---- report -----------------------------------------------------------------
-    keep = re.compile(r"Monitor:|Error|ERROR|Fatal|FATAL|TB Error|Spike|RVFI|Memory Error|"
+    keep = re.compile(r"Monitor:|Magic memory:|Perf:|Error|ERROR|Fatal|FATAL|TB Error|Spike|RVFI|Memory Error|"
                       r"\$finish|mismatch|Timed out")
     lines = [l for l in out.splitlines() if keep.search(l)]
     print("\n".join(lines[-40:]))

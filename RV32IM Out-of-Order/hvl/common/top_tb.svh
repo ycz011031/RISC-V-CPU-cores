@@ -6,11 +6,19 @@
     mem_itf_banked mem_itf(.*);
     
     // Pick one of the two options (only one of these should be uncommented at a time):
-    dram_w_burst_frfcfs_controller mem(.itf(mem_itf));
+    `ifdef ECE411_MAGIC_MEM
+        magic_dram_w_burst mem(.itf(mem_itf));              // no DRAM timing
+    `else
+        dram_w_burst_frfcfs_controller mem(.itf(mem_itf));
+    `endif
     // random_tb random_tb(.itf(mem_itf)); // For randomized testing
 
     mon_itf #(.CHANNELS(8)) mon_itf(.*);
     monitor #(.CHANNELS(8)) monitor(.itf(mon_itf));
+
+    `ifdef ECE411_PERF
+        perf_probe perf_probe(.itf(mon_itf));   // cycle accounting -> ./perf.json
+    `endif
 
     cpu dut(
         .clk            (clk),

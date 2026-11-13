@@ -4,25 +4,6 @@
 
 package rv32i_types;
 
-    typedef enum logic {
-        rs1_out = 1'b0,
-        pc_out  = 1'b1
-    } alu_m1_sel_t;
-
-    // more mux def here
-
-    typedef struct packed {
-        logic   [31:0]      inst;
-        logic   [31:0]      pc;
-        logic   [63:0]      order;
-
-        alu_m1_sel_t        alu_m1_sel;
-
-        // what else?
-
-    } id_ex_stage_reg_t;
-
-
     typedef enum logic [6:0] {
         op_b_lui       = 7'b0110111, // load upper immediate (U type)
         op_b_auipc     = 7'b0010111, // add upper immediate PC (U type)
@@ -148,9 +129,120 @@ package rv32i_types;
 
     } instr_t;
 
+    // ========================================================================
+    // Memory-side interface (core <-> arbiter <-> shared cache)
+    //
+    // Hold-until-response protocol: a requester keeps presenting the same
+    // request until `resp`. If it drops or changes the request before then,
+    // the request is abandoned: a cache miss still fills the line, but no
+    // response is ever returned for it. `raddr` tells the requester which
+    // request a response belongs to (fetch uses it to drop wrong-path hits).
+    // ========================================================================
 
+    typedef struct packed {
+        logic   [31:0]  addr;       // word aligned
+        logic   [3:0]   rmask;
+        logic   [3:0]   wmask;
+        logic   [31:0]  wdata;
+    } mem_req_t;
 
+    typedef struct packed {
+        logic           resp;
+        logic   [31:0]  rdata;
+        logic   [31:0]  raddr;      // address of the request being answered
+    } mem_rsp_t;
 
+    // ========================================================================
+    // Inter-stage interfaces
+    //
+    //   fetch     --if_id-->        decode
+    //   decode    --id_ex-->        execute
+    //   execute   --ex_mem-->       memory
+    //   execute   --redirect-->     fetch (mispredicted branch, jalr)
+    //   memory    --mem_wb-->       register file (writeback), commit
+    //   hazard    --fwd_operands--> execute (forwarded rs1/rs2)
+    //
+    // Control: one global stall (`mem_stall`, memory stage waiting on the
+    // cache or the M unit) freezes fetch/decode/execute/memory in place; a
+    // load-use (or M-use) hazard holds IF/ID for one cycle; a redirect from
+    // execute flushes IF/ID and the fetch in flight.
+    // ========================================================================
 
+    // fetch -> decode
+    typedef struct packed {
+        logic           valid;
+        logic   [31:0]  inst;
+        logic   [31:0]  pc;
+    } if_id_stage_reg_t;
+
+    // decode -> execute (ID/EX pipeline register)
+    typedef struct packed {
+        logic           valid;
+        logic   [31:0]  inst;       // for RVFI
+        logic   [31:0]  pc;         // the branch's not-taken PC is pc + 4
+        logic   [6:0]   opcode;
+        logic   [2:0]   funct3;
+        logic   [6:0]   funct7;
+        logic   [4:0]   rd_s;       // 0 when the instruction writes no register
+        logic   [4:0]   rs1_s;
+        logic   [4:0]   rs2_s;      // 0 unless the instruction reads rs2
+        logic   [31:0]  rs1_v;      // register-file values (refreshed while stalled)
+        logic   [31:0]  rs2_v;
+        logic   [31:0]  imm;
+    } id_ex_stage_reg_t;
+
+    // hazard unit -> execute: operands after forwarding
+    typedef struct packed {
+        logic   [31:0]  rs1_v;
+        logic   [31:0]  rs2_v;
+    } fwd_operands_t;
+
+    // execute -> fetch: control-flow redirect
+    typedef struct packed {
+        logic           valid;
+        logic   [31:0]  target;
+    } redirect_t;
+
+    // commit record (RVFI), same fields as the out-of-order core's rvfi_entry
+    typedef struct packed {
+        logic           valid;
+        logic   [63:0]  order;
+        logic   [31:0]  inst;
+        logic   [4:0]   rs1_addr;
+        logic   [4:0]   rs2_addr;
+        logic   [31:0]  rs1_rdata;
+        logic   [31:0]  rs2_rdata;
+        logic   [4:0]   rd_addr;
+        logic   [31:0]  rd_wdata;
+        logic   [31:0]  pc_rdata;
+        logic   [31:0]  pc_wdata;
+        logic   [31:0]  mem_addr;
+        logic   [3:0]   mem_rmask;
+        logic   [3:0]   mem_wmask;
+        logic   [31:0]  mem_rdata;
+        logic   [31:0]  mem_wdata;
+    } rvfi_entry;
+
+    // execute -> memory (EX/MEM pipeline register)
+    typedef struct packed {
+        logic           valid;
+        logic           is_load;
+        logic           is_store;
+        logic           is_m;       // RV32M op, result comes from m_unit
+        logic   [2:0]   funct3;
+        logic   [1:0]   addr_lo;    // byte offset of a load
+        mem_req_t       req;        // data-cache request (held until resp)
+        logic   [4:0]   rd_s;
+        logic   [31:0]  rd_v;       // ALU result (not valid for loads / M ops)
+        rvfi_entry      rvfi;
+    } ex_mem_stage_reg_t;
+
+    // memory -> writeback (MEM/WB pipeline register); also the commit point
+    typedef struct packed {
+        logic           valid;
+        logic   [4:0]   rd_s;
+        logic   [31:0]  rd_v;
+        rvfi_entry      rvfi;
+    } mem_wb_stage_reg_t;
 
 endpackage

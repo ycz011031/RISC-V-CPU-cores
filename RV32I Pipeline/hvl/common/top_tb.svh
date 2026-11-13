@@ -3,34 +3,34 @@
         $value$plusargs("TIMEOUT_ECE411=%d", timeout);
     end
 
-    mem_itf_w_mask #(.CHANNELS(2)) mem_itf(.*);
-
-    n_port_pipeline_memory_32_w_mask #(.CHANNELS(2), .MAGIC(0)) mem(.itf(mem_itf));
-    //random_tb random_tb(.itf(mem_itf)); // For randomized testing
-
+    // same banked DRAM model as the out-of-order core
+    mem_itf_banked mem_itf(.*);
+    `ifdef ECE411_MAGIC_MEM
+        magic_dram_w_burst mem(.itf(mem_itf));              // no DRAM timing
+    `else
+        dram_w_burst_frfcfs_controller mem(.itf(mem_itf));
+    `endif
 
     mon_itf mon_itf(.*);
     monitor monitor(.itf(mon_itf));
+
+    `ifdef ECE411_PERF
+        perf_probe perf_probe(.itf(mon_itf));   // cycle accounting -> ./perf.json
+    `endif
 
     cpu dut(
         .clk            (clk),
         .rst            (rst),
 
-        .imem_addr      (mem_itf.addr [0]),
-        .imem_rmask     (mem_itf.rmask[0]),
-        .imem_rdata     (mem_itf.rdata[0]),
-        .imem_resp      (mem_itf.resp [0]),
-
-        .dmem_addr      (mem_itf.addr [1]),
-        .dmem_rmask     (mem_itf.rmask[1]),
-        .dmem_wmask     (mem_itf.wmask[1]),
-        .dmem_rdata     (mem_itf.rdata[1]),
-        .dmem_wdata     (mem_itf.wdata[1]),
-        .dmem_resp      (mem_itf.resp [1])
+        .bmem_addr      (mem_itf.addr  ),
+        .bmem_read      (mem_itf.read  ),
+        .bmem_write     (mem_itf.write ),
+        .bmem_wdata     (mem_itf.wdata ),
+        .bmem_ready     (mem_itf.ready ),
+        .bmem_raddr     (mem_itf.raddr ),
+        .bmem_rdata     (mem_itf.rdata ),
+        .bmem_rvalid    (mem_itf.rvalid)
     );
-
-    assign mem_itf.wmask[0] = '0;
-    assign mem_itf.wdata[0] = 'x;
 
     `include "rvfi_reference.svh"
 

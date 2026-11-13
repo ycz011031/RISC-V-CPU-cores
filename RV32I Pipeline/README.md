@@ -1,3 +1,5 @@
+> **Note:** This file is the original course specification. The design has since been extended (RV32IM, a shared direct-mapped cache behind an I/D arbiter, and the same banked DRAM interface as the out-of-order core), so the two-port memory timing described below no longer applies to `hdl/cpu.sv`. See the repository root `README.md`.
+
 # ECE 411: mp_pipeline README
 
 ## Pipelined RV32I Processor

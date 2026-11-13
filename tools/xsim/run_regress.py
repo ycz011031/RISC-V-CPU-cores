@@ -38,7 +38,7 @@ BENCHES = {
 CORE_DIR = {"ooo": OOO, "pipeline": PIPE}
 
 
-def run_one(core, bench, elf, compile_first, extra):
+def run_one(core, bench, elf, compile_first, extra, build="xsim"):
     cmd = [sys.executable, RUN, core, os.path.join(REPO, elf)] + extra
     if not compile_first:
         cmd.append("--no-compile")
@@ -51,14 +51,17 @@ def run_one(core, bench, elf, compile_first, extra):
     status = "PASS" if p.returncode == 0 else "FAIL"
     if "xvlog failed" in out or "xelab failed" in out:
         status = "BUILD FAIL"
-    log_dir = os.path.join(REPO, CORE_DIR[core], "xsim", "logs")
+    log_dir = os.path.join(REPO, CORE_DIR[core], build, "logs")
     os.makedirs(log_dir, exist_ok=True)
-    src = os.path.join(REPO, CORE_DIR[core], "xsim", "spike", "commit.log")
+    src = os.path.join(REPO, CORE_DIR[core], build, "spike", "commit.log")
     dst = os.path.join(log_dir, f"{bench}.commit.log")
     if os.path.isfile(src):
         shutil.copyfile(src, dst)
-    shutil.copyfile(os.path.join(REPO, CORE_DIR[core], "xsim", "run", "simulation.log"),
+    shutil.copyfile(os.path.join(REPO, CORE_DIR[core], build, "run", "simulation.log"),
                     os.path.join(log_dir, f"{bench}.simulation.log"))
+    perf = os.path.join(REPO, CORE_DIR[core], build, "run", "perf.json")
+    if os.path.isfile(perf):
+        shutil.copyfile(perf, os.path.join(log_dir, f"{bench}.perf.json"))
     if status != "PASS":
         print(out[-3000:])
     return status, (ipc[-1] if ipc else "-"), dt, dst
@@ -70,10 +73,15 @@ def main():
     ap.add_argument("--core", choices=["ooo", "pipeline", "both"], default="both")
     ap.add_argument("--bench", action="append", choices=sorted(BENCHES),
                     help="benchmark(s) to run (default: all)")
+    ap.add_argument("--magic", action="store_true",
+                    help="magic memory (no DRAM timing); logs in <core>/xsim_magic/logs")
     ap.add_argument("extra", nargs=argparse.REMAINDER,
                     help="extra args passed to run_xsim.py (after --)")
     args = ap.parse_args()
     extra = [a for a in args.extra if a != "--"]
+    build = "xsim_magic" if args.magic else "xsim"
+    if args.magic:
+        extra.append("--magic")
 
     cores = ["ooo", "pipeline"] if args.core == "both" else [args.core]
     benches = args.bench or list(BENCHES)
@@ -82,7 +90,7 @@ def main():
     for core in cores:
         for k, bench in enumerate(benches):
             print(f"[regress] {core:8s} {bench:15s} ...", flush=True)
-            r = run_one(core, bench, BENCHES[bench], k == 0, extra)
+            r = run_one(core, bench, BENCHES[bench], k == 0, extra, build)
             results[(core, bench)] = r
             print(f"[regress] {core:8s} {bench:15s} {r[0]:10s} IPC {r[1]:>9s}  {r[2]:6.1f}s",
                   flush=True)

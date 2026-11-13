@@ -29,6 +29,41 @@ module monitor #(
         longint power_start_time = longint'(0);
         bit power_printed = 1'b0;
 
+        // commits-per-cycle histogram over the same window as the IPC
+        // (reset at the segment-start marker, frozen at the segment-stop marker)
+        longint commit_hist [CHANNELS+1];
+        bit     hist_frozen = 1'b0;
+        initial foreach (commit_hist[i]) commit_hist[i] = longint'(0);
+
+        always @(posedge itf.clk iff !itf.rst) begin
+            automatic int n = 0;
+            for (int unsigned channel = 0; channel < CHANNELS; channel++) begin
+                if (itf.valid[channel]) begin
+                    n++;
+                    if (itf.inst[channel] == 32'h00102013) begin
+                        foreach (commit_hist[i]) commit_hist[i] = longint'(0);
+                        n = 1;
+                    end
+                end
+            end
+            if (!hist_frozen) commit_hist[n] += longint'(1);
+            for (int unsigned channel = 0; channel < CHANNELS; channel++) begin
+                if (itf.valid[channel] && itf.inst[channel] == 32'h00202013) hist_frozen = 1'b1;
+            end
+        end
+
+        function automatic void print_commit_hist();
+            automatic string line = "Monitor: commits/cycle histogram:";
+            automatic longint total = 0;
+            foreach (commit_hist[i]) total += commit_hist[i];
+            foreach (commit_hist[i]) begin
+                if (i <= 1 || commit_hist[i] != 0)
+                    line = {line, $sformatf("  %0d: %0d (%.1f%%)", i, commit_hist[i],
+                                            100.0 * real'(commit_hist[i]) / real'(total))};
+            end
+            $display("%s", line);
+        endfunction
+
         `ifdef ECE411_VERILATOR
             bit dump_on = 1'b0;
         `endif
@@ -85,6 +120,7 @@ module monitor #(
         end
 
         final begin
+            print_commit_hist();
             if (!ipc_printed) begin
                 $display("Monitor: Total IPC: %f", real'(inst_count) / cycle_count);
                 $display("Monitor: Total Time: %t", $time - start_time);
