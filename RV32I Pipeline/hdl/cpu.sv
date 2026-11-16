@@ -3,12 +3,18 @@
 // ============================================================================
 //
 //   core --imem--+
-//                +--> arbiter --> cache_shared --> dram_adapter --> bmem (DRAM)
-//   core --dmem--+    (D first)   (DM, write-back)  (32 B line <-> 4 x 64 b bursts)
+//                +--> arbiter --> pcache --> dram_adapter --> bmem (DRAM)
+//   core --dmem--+    (D first)   (ip/pcache.sv: 2 KB DM, write-back, pipelined,
+//                                  32-line victim cache)
 //
 // Top-level ports are the same banked-memory interface as the out-of-order
 // core, so both cores run on the same testbench memory model.
 // ============================================================================
+
+// victim-cache size of the caches (override with +define+PCACHE_VC_ENTRIES=n; 0 = none)
+`ifndef PCACHE_VC_ENTRIES
+`define PCACHE_VC_ENTRIES 32
+`endif
 
 module cpu
 import rv32i_types::*;
@@ -56,13 +62,30 @@ import rv32i_types::*;
         .c_rsp_src  (cache_rsp_src)
     );
 
-    cache_shared cache (
+    // shared cache: 64 x 32 B direct mapped, write-back, 32-line victim cache.
+    // Fetch and the memory stage present their next request (or nothing) in
+    // the response cycle, so hits stream one per cycle (ACCEPT_ON_RESP = 1).
+    pcache #(
+        .WAYS           (1),
+        .SETS           (64),
+        .UFP_BYTES      (4),
+        .WRITABLE       (1'b1),
+        .VC_ENTRIES     (`PCACHE_VC_ENTRIES),
+        .ACCEPT_ON_RESP (1'b1),
+        .ID_W           (1)
+    ) cache (
         .clk         (clk),
         .rst         (rst),
-        .ufp_req     (cache_req),
-        .ufp_src     (cache_src),
-        .ufp_rsp     (cache_rsp),
-        .ufp_rsp_src (cache_rsp_src),
+        .ufp_addr    (cache_req.addr),
+        .ufp_rmask   (cache_req.rmask),
+        .ufp_wmask   (cache_req.wmask),
+        .ufp_wdata   (cache_req.wdata),
+        .ufp_id      (cache_src),
+        .ufp_rdata   (cache_rsp.rdata),
+        .ufp_resp    (cache_rsp.resp),
+        .ufp_raddr   (cache_rsp.raddr),
+        .ufp_rsp_id  (cache_rsp_src),
+        .ufp_miss    (),
         .dfp_addr    (dfp_addr),
         .dfp_read    (dfp_read),
         .dfp_write   (dfp_write),

@@ -3,6 +3,8 @@
 /RV32I Pipeline/xsim/
 /RV32IM Out-of-Order/xsim_magic/
 /RV32I Pipeline/xsim_magic/
+/RV32IM Out-of-Order/xsim_*/
+/RV32I Pipeline/xsim_*/
 __pycache__/
 # Vivado batch-mode droppings
 *.jou

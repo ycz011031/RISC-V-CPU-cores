@@ -1,5 +1,5 @@
 // OpenRAM SRAM model
-// Words: 256
+// Words: 4096
 // Word size: 2
 
 module gshare_array(
@@ -14,7 +14,7 @@ module gshare_array(
   );
 
   parameter DATA_WIDTH = 2 ;
-  parameter ADDR_WIDTH = 8 ;
+  parameter ADDR_WIDTH = 12 ;
   parameter RAM_DEPTH = 1 << ADDR_WIDTH;
 
 `ifdef USE_POWER_PINS

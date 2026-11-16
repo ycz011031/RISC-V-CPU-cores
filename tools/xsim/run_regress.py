@@ -40,6 +40,8 @@ CORE_DIR = {"ooo": OOO, "pipeline": PIPE}
 
 def run_one(core, bench, elf, compile_first, extra, build="xsim"):
     cmd = [sys.executable, RUN, core, os.path.join(REPO, elf)] + extra
+    if build not in ("xsim", "xsim_magic"):
+        cmd += ["--build-dir", os.path.join(REPO, CORE_DIR[core], build)]
     if not compile_first:
         cmd.append("--no-compile")
     t0 = time.time()
@@ -75,11 +77,14 @@ def main():
                     help="benchmark(s) to run (default: all)")
     ap.add_argument("--magic", action="store_true",
                     help="magic memory (no DRAM timing); logs in <core>/xsim_magic/logs")
+    ap.add_argument("--build", help="build/log directory name under each core "
+                    "(default: xsim, or xsim_magic with --magic), e.g. for a variant "
+                    "run with -- -D PCACHE_VC_ENTRIES=0")
     ap.add_argument("extra", nargs=argparse.REMAINDER,
                     help="extra args passed to run_xsim.py (after --)")
     args = ap.parse_args()
     extra = [a for a in args.extra if a != "--"]
-    build = "xsim_magic" if args.magic else "xsim"
+    build = args.build or ("xsim_magic" if args.magic else "xsim")
     if args.magic:
         extra.append("--magic")
 

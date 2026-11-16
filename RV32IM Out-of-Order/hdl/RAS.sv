@@ -1,84 +1,93 @@
-module RAS 
-import rv32i_types::*;
+// ============================================================================
+// RAS : return address stack with commit-time repair
+// ============================================================================
+//
+// Two copies of the same circular stack:
+//   * speculative : updated at fetch (push = call, pop = return); its top is
+//                   the predicted return target.
+//   * committed   : updated when a call / return commits, so it always holds
+//                   the architectural call stack.
+// Mispredicts are recovered at commit, so on a flush every instruction after
+// the mispredicting one is wrong path: the speculative copy is overwritten
+// with the committed copy (including the commit of this cycle).
+//
+// push + pop in the same operation (jalr with two different link registers)
+// replaces the top entry. Overflow wraps and overwrites the oldest entry;
+// both copies wrap identically, so a repair stays consistent.
+//
+// Arrays are packed and written whole (xsim drops some indexed NBAs into
+// unpacked arrays).
+// ============================================================================
+
+module RAS
 #(
-    parameter               RAS_HEIGHT     = 16,
-    parameter               RAS_ADDR_L = 4
+    parameter int RAS_HEIGHT = 8,
+    parameter int RAS_ADDR_L = $clog2(RAS_HEIGHT)
 )(
-    input   logic                   clk,
-    input   logic                   rst,
-    input   logic                   flush,
-    input   logic                   push,
-    input   logic                   pop,
-    input   ras_entry_t             din,
+    input   logic           clk,
+    input   logic           rst,
 
-    output  ras_entry_t             dout,
-    output  logic                   full,
-    output  logic                   empty,
+    // fetch side (speculative)
+    input   logic           push,
+    input   logic           pop,
+    input   logic   [31:0]  push_addr,
+    output  logic   [31:0]  top_addr,
 
-    output logic [RAS_ADDR_L-1:0]  ras_addr,
+    // commit side
+    input   logic           c_push,
+    input   logic           c_pop,
+    input   logic   [31:0]  c_push_addr,
 
-    input ras_entry_t              ret_ras_top,
-    input logic [RAS_ADDR_L-1:0]  ret_pointer,
-    input logic ret_ras_empty
+    // mispredict flush (recovered at commit)
+    input   logic           flush
 );
 
-    logic   [RAS_ADDR_L-1:0]         top_pointer;      //next free entry
-    ras_entry_t        internal_array  [RAS_HEIGHT];
+    typedef logic [RAS_HEIGHT-1:0][31:0] stack_t;
 
-    logic empty_reg;
+    stack_t                 s_stk, s_stk_n, c_stk, c_stk_n;
+    logic [RAS_ADDR_L-1:0]  s_top, s_top_n, c_top, c_top_n;
 
-    always_ff @( posedge clk ) begin : lifo_update
-
-        if (rst) begin
-            top_pointer <= '0;
-            empty_reg <= '1;
-            for (integer i = 0; i < RAS_HEIGHT; i++) begin           //for loop maybe unnecessary because pointers are equal at reset
-                internal_array[i] <= '0;
-            end
-        end else if (flush) begin
-            top_pointer <= ret_pointer;
-            internal_array[ret_pointer] <= ret_ras_top;
-            empty_reg <= ret_ras_empty;
-        end else begin
-            case ({push, pop})
-                2'b11: begin  // simult enq and deq             //can edit this to move enq logic inside if(!empty) so that nothing happens if both asserted when empty
-                    internal_array[top_pointer] <= din;
-                    if (empty_reg) begin
-                        empty_reg <= '0;
-                    end
-                end
-                2'b10: begin  //only enq
-                    if (!full) begin
-                        if (empty_reg) begin
-                            internal_array[top_pointer] <= din;
-                            empty_reg <= '0;
-                        end else begin
-                            top_pointer <= top_pointer + 1'b1;
-                            internal_array[top_pointer + 1'b1] <= din;
-                        end 
-                    end
-                end
-                2'b01: begin  // only deq
-                    if (!empty_reg) begin
-                        if(top_pointer == '0) begin
-                            empty_reg <= '1;
-                        end else begin
-                            top_pointer <= top_pointer - 1'b1;
-                        end
-                    end
-                end
-                default: ;
-            endcase
+    // one stack operation: push writes above the top (or over it when the
+    // same operation also pops); pop moves the top down
+    function automatic void step(input stack_t stk, input logic [RAS_ADDR_L-1:0] top,
+                                 input logic ps, input logic pp, input logic [31:0] addr,
+                                 output stack_t stk_n, output logic [RAS_ADDR_L-1:0] top_n);
+        logic [RAS_ADDR_L-1:0] wr;
+        wr    = pp ? top : top + 1'b1;
+        stk_n = stk;
+        top_n = top;
+        if (ps) begin
+            stk_n[wr] = addr;
+            top_n     = wr;
+        end else if (pp) begin
+            top_n     = top - 1'b1;
         end
-
-    end
-    assign ras_addr = top_pointer;
+    endfunction
 
     always_comb begin
-        
-        full = top_pointer == '1; // overflow is 1 so next free entry is above stack
-        empty = empty_reg;
-        dout = empty_reg ? '0 : internal_array[top_pointer];
+        step(c_stk, c_top, c_push, c_pop, c_push_addr, c_stk_n, c_top_n);
+        if (flush) begin
+            s_stk_n = c_stk_n;
+            s_top_n = c_top_n;
+        end else begin
+            step(s_stk, s_top, push, pop, push_addr, s_stk_n, s_top_n);
+        end
     end
+
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            s_stk <= '0;
+            c_stk <= '0;
+            s_top <= '0;
+            c_top <= '0;
+        end else begin
+            s_stk <= s_stk_n;
+            c_stk <= c_stk_n;
+            s_top <= s_top_n;
+            c_top <= c_top_n;
+        end
+    end
+
+    assign top_addr = s_stk[s_top];
 
 endmodule : RAS

@@ -5,11 +5,24 @@
 package rv32i_types;
 
     localparam INST_TYPE_L = 3;
-    localparam PADDR_L = 5;
-    localparam ROBADDR_L = 5;
-    localparam PHT_ADDR_L = 8;
+`ifdef OOO_WIN_BITS
+    localparam PADDR_L = `OOO_WIN_BITS;       // experiment: ROB and rename buffer size
+    localparam ROBADDR_L = `OOO_WIN_BITS;
+`else
+    localparam PADDR_L = 6;                     // 64-entry rename buffer
+    localparam ROBADDR_L = 6;                   // 64-entry ROB
+`endif
+`ifdef OOO_PHT_BITS
+    localparam PHT_ADDR_L = `OOO_PHT_BITS;
+`else
+    localparam PHT_ADDR_L = 12;                 // 4096-entry gshare table, 12-bit history
+`endif
     localparam FTQ_DEPTH = 16;
+`ifdef OOO_MEM_DEPTH
+    localparam MEM_DEPTH = `OOO_MEM_DEPTH;   // must match cpu.sv MEM_DEPTH
+`else
     localparam MEM_DEPTH = 4;
+`endif
 
     localparam FTQ_ADDR_L = $clog2(FTQ_DEPTH);
 
@@ -236,7 +249,10 @@ package rv32i_types;
         logic   [2:0]           mem_op;
         logic   [31:0]          mem_addr;
         logic   [3:0]           mem_wmask;
-        logic   [31:0]          mem_wdata;
+        logic   [31:0]          mem_wdata;      // the store's register value (unshifted: placed in its
+                                                // byte lanes by store_wdata() when the store drains)
+        logic                   data_valid;     // store data present (it may arrive after the address)
+        logic   [PADDR_L-1:0]   data_paddr;     // physical register the data comes from while !data_valid
     } store_entry_t;
 
     typedef struct packed {
@@ -282,6 +298,8 @@ package rv32i_types;
         logic [PHT_ADDR_L-1:0]  ghr;
         // logic [31:0]            func_ret;
         logic [1:0]                  commit_count;
+        logic                        ras_push;     // jalr is a call  (RAS repair at commit)
+        logic                        ras_pop;      // jalr is a return
     } ftq_entry_t;
 
     typedef struct packed {
@@ -340,6 +358,30 @@ package rv32i_types;
         } j_type;
 
     } instr_t;
+
+    // store data placed in its byte lanes (wmask carries the address offset)
+    // fetch: which candidate pc_next is (if_stage -> line buffer parallel tag compare)
+typedef enum logic [2:0] {NX_PC, NX_FLUSH, NX_FLUSH_REG, NX_BR, NX_PC4, NX_T2, NX_PC8} nx_sel_t;
+
+function automatic logic [31:0] store_wdata(input logic [2:0] op, input logic [3:0] wmask, input logic [31:0] v);
+        logic [31:0] w;
+        w = '0;
+        unique case (op)
+            store_f3_sb: begin
+                if      (wmask[3]) w[31:24] = v[7:0];
+                else if (wmask[2]) w[23:16] = v[7:0];
+                else if (wmask[1]) w[15:8]  = v[7:0];
+                else               w[7:0]   = v[7:0];
+            end
+            store_f3_sh: begin
+                if (wmask[2]) w[31:16] = v[15:0];
+                else          w[15:0]  = v[15:0];
+            end
+            store_f3_sw: w = v;
+            default:     w = '0;
+        endcase
+        return w;
+    endfunction
 
 endpackage
 

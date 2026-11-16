@@ -18,7 +18,10 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CORES = {"ooo": "RV32IM Out-of-Order", "pipeline": "RV32I Pipeline"}
-MEMS = {"dram": "xsim", "magic": "xsim_magic"}
+# build directory -> (memory model, configuration). "vc32" is the default
+# build; "novc" is run_regress.py --build xsim[_magic]_novc -- -D PCACHE_VC_ENTRIES=0
+BUILDS = {"xsim": ("dram", "vc32"), "xsim_magic": ("magic", "vc32"),
+          "xsim_novc": ("dram", "novc"), "xsim_magic_novc": ("magic", "novc")}
 BENCH_ORDER = ["coremark_rv32i", "coremark_im", "aes_sha", "compression", "fft", "mergesort", "m_ext_test"]
 
 
@@ -57,6 +60,14 @@ def derive(c):
         r["branch_mispred_pct_of_branches"] = pct(c["MISPRED_BRANCH"], c["COMMIT_BRANCH"])
         r["jalr_mispred_pct_of_jalr"] = pct(c["MISPRED_JALR"], c["COMMIT_JALR"])
         r["c0_head_other_pct"] = pct(c["C0_HEAD_STORE"] + c["C0_HEAD_MULDIV"] + c["C0_HEAD_BRANCH"], cyc)
+        # pcache counters (absent in logs from before ip/pcache.sv)
+        for x in ["ICACHE", "DCACHE"]:
+            g = lambda k: c.get(f"{x}_{k}", 0)
+            lx = x.lower()
+            r[f"{lx}_miss_pct_of_access"] = pct(g("MISS"), g("ACCESS"))
+            r[f"{lx}_vc_hit_pct_of_miss"] = pct(g("VC_HIT"), g("MISS"))
+            r[f"{lx}_dram_fills_per_kinst"] = round(1000.0 * g("DRAM_FILL") / insts, 2) if insts else 0.0
+            r[f"{lx}_busy_pct"] = pct(g("BUSY"), cyc)
     else:
         insts = c["COMMITS"]
         r["insts"] = insts
@@ -69,6 +80,11 @@ def derive(c):
             r[k.lower() + "_pct"] = pct(c[k], cyc)
         r["cache_miss_i_pct_of_access"] = pct(c["CACHE_MISS_I"], c["CACHE_ACCESS_I"])
         r["cache_miss_d_pct_of_access"] = pct(c["CACHE_MISS_D"], c["CACHE_ACCESS_D"])
+        g = lambda k: c.get(k, 0)
+        r["cache_vc_hit_pct_of_miss"] = pct(g("CACHE_VC_HIT_I") + g("CACHE_VC_HIT_D"),
+                                            c["CACHE_MISS_I"] + c["CACHE_MISS_D"])
+        r["cache_dram_fills_per_kinst"] = round(1000.0 * g("CACHE_DRAM_FILL") / insts, 2) if insts else 0.0
+        r["cache_store_drain_stall_pct"] = pct(g("CACHE_STORE_DRAIN_STALL"), cyc)
         branches = c["COMMIT_BRANCH"] + c["COMMIT_JAL"] + c["COMMIT_JALR"]
         mispred = c["REDIRECT_BRANCH"] + c["REDIRECT_JALR"]
         # lost (bubble) cycles charged to redirects, per redirect
@@ -89,15 +105,15 @@ def main():
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(REPO, "tools", "xsim", "perf_rows.json")
     rows = []
     for core, cdir in CORES.items():
-        for mem, bdir in MEMS.items():
+        for bdir, (mem, cfg) in BUILDS.items():
             for f in sorted(glob.glob(os.path.join(REPO, cdir, bdir, "logs", "*.perf.json"))):
                 bench = os.path.basename(f)[:-len(".perf.json")]
                 c = json.load(open(f))
-                row = {"core": core, "mem": mem, "bench": bench}
+                row = {"core": core, "mem": mem, "cfg": cfg, "bench": bench}
                 row.update({k: v for k, v in c.items() if k != "core"})
                 row.update(derive(c))
                 rows.append(row)
-    rows.sort(key=lambda r: (r["core"], r["mem"],
+    rows.sort(key=lambda r: (r["core"], r["cfg"], r["mem"],
                              BENCH_ORDER.index(r["bench"]) if r["bench"] in BENCH_ORDER else 99))
     code = open(os.path.abspath(__file__)).read()
     meta = [
@@ -109,7 +125,7 @@ def main():
         json.dump({"rows": rows, "meta": meta}, fh, indent=1)
     print(f"perf_report: {len(rows)} rows -> {out}")
     for r in rows:
-        print(f"{r['core']:9s} {r['mem']:6s} {r['bench']:15s} IPC {r['ipc']:.3f}  cycles {r['CYCLES']}")
+        print(f"{r['core']:9s} {r['cfg']:5s} {r['mem']:6s} {r['bench']:15s} IPC {r['ipc']:.3f}  cycles {r['CYCLES']}")
 
 
 if __name__ == "__main__":

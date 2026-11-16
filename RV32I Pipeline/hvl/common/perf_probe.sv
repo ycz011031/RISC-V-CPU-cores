@@ -47,7 +47,10 @@ module perf_probe (
         REDIRECT_BRANCH, REDIRECT_JALR, COMMIT_BRANCH, COMMIT_JAL, COMMIT_JALR,
         COMMIT_LOAD, COMMIT_STORE, COMMIT_MULDIV,
         // shared cache
+        // (pcache: MISS_* = main-array misses, VC_HIT_* = of those, served by the
+        //  victim cache; BUSY_FILL = cycles out of the pipeline state)
         CACHE_ACCESS_I, CACHE_ACCESS_D, CACHE_MISS_I, CACHE_MISS_D, CACHE_WRITEBACK,
+        CACHE_VC_HIT_I, CACHE_VC_HIT_D, CACHE_DRAM_FILL, CACHE_STORE_DRAIN_STALL,
         CACHE_BUSY_FILL, PORT_BOTH_REQUEST,
         NUM_CTR
     } ctr_e;
@@ -69,8 +72,11 @@ module perf_probe (
     always @(posedge itf.clk) begin
         automatic tag_e redir_cause, fetch_cause, mem_cause;
         automatic tag_e n_ifid = t_ifid, n_idex = t_idex, n_exmem = t_exmem, n_memwb = t_memwb;
-        automatic logic [1:0] cstate = top_tb.dut.cache.state;
-        automatic bit i_miss_now = (cstate == 2'd1) && !top_tb.dut.cache.hit && (top_tb.dut.cache.src_q == 1'b0);
+        // pcache states: 0 RUN, 1 SWAP, 2 EVICT, 3 FILL
+        automatic int cstate = int'(top_tb.dut.cache.state);
+        automatic bit c_busy = (cstate != 0);
+        automatic bit c_miss = top_tb.dut.cache.b_miss;
+        automatic bit i_miss_now = c_miss && (top_tb.dut.cache.q.id == 1'b0);
         automatic bit d_rsp_now  = top_tb.dut.cache_rsp.resp && (top_tb.dut.cache_rsp_src == 1'b1);
         automatic logic [31:0] cinst = `C.mem_wb.rvfi.inst;
 
@@ -84,7 +90,7 @@ module perf_probe (
             redir_cause = (`C.id_ex.opcode == 7'b1100111) ? T_FLUSH_JALR : T_FLUSH_BRANCH;
             if (`C.fetch.jalr_wait)                                        fetch_cause = T_FLUSH_JALR;
             else if (mem_stall_q)                                          fetch_cause = T_FETCH_RESTART;
-            else if (cstate == 2'd2 || cstate == 2'd3 || i_miss_now)       fetch_cause = T_ICACHE_MISS;
+            else if (c_busy || i_miss_now)                                 fetch_cause = T_ICACHE_MISS;
             else if (d_rsp_now || d_active_q)                              fetch_cause = T_PORT_CONFLICT;
             else                                                           fetch_cause = T_OTHER;
             mem_cause = `C.ex_mem.is_m ? T_MEM_MULDIV : T_MEM_DCACHE;
@@ -122,13 +128,18 @@ module perf_probe (
                     if (redir_cause == T_FLUSH_JALR) ctr[REDIRECT_JALR]++; else ctr[REDIRECT_BRANCH]++;
                 end
                 if (top_tb.dut.cache.accept) begin
-                    if (top_tb.dut.cache.ufp_src) ctr[CACHE_ACCESS_D]++; else ctr[CACHE_ACCESS_I]++;
+                    if (top_tb.dut.cache.ufp_id) ctr[CACHE_ACCESS_D]++; else ctr[CACHE_ACCESS_I]++;
                 end
-                if (cstate == 2'd1 && !top_tb.dut.cache.hit) begin
-                    if (top_tb.dut.cache.src_q) ctr[CACHE_MISS_D]++; else ctr[CACHE_MISS_I]++;
-                    if (top_tb.dut.cache.state_n == 2'd2) ctr[CACHE_WRITEBACK]++;
+                if (c_miss) begin
+                    if (top_tb.dut.cache.q.id) ctr[CACHE_MISS_D]++; else ctr[CACHE_MISS_I]++;
+                    if (top_tb.dut.cache.vc_hit) begin
+                        if (top_tb.dut.cache.q.id) ctr[CACHE_VC_HIT_D]++; else ctr[CACHE_VC_HIT_I]++;
+                    end
                 end
-                if (cstate == 2'd2 || cstate == 2'd3) ctr[CACHE_BUSY_FILL]++;
+                if (cstate == 2 && top_tb.dut.cache.dfp_resp) ctr[CACHE_WRITEBACK]++;
+                if (cstate == 3 && top_tb.dut.cache.dfp_resp) ctr[CACHE_DRAM_FILL]++;
+                if (top_tb.dut.cache.force_drain) ctr[CACHE_STORE_DRAIN_STALL]++;
+                if (c_busy) ctr[CACHE_BUSY_FILL]++;
                 if (top_tb.dut.arbiter.d_active && |top_tb.dut.imem_req.rmask) ctr[PORT_BOTH_REQUEST]++;
             end
 

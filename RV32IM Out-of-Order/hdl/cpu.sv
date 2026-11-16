@@ -1,3 +1,12 @@
+// victim-cache size of the caches (override with +define+PCACHE_VC_ENTRIES=n; 0 = none)
+`ifndef PCACHE_VC_ENTRIES
+`define PCACHE_VC_ENTRIES 32
+`endif
+// I-cache sets (32 B lines, 4 ways; override with +define+OOO_ICACHE_SETS=n)
+`ifndef OOO_ICACHE_SETS
+`define OOO_ICACHE_SETS 16
+`endif
+
 module cpu
 import rv32i_types::*;
 (
@@ -17,14 +26,32 @@ import rv32i_types::*;
 );
 
     localparam INSTR_DEPTH = 16;
+`ifdef OOO_MEM_DEPTH
+    localparam MEM_DEPTH = `OOO_MEM_DEPTH;  // experiment: load / store queue depth
+`else
     localparam MEM_DEPTH = 4;
+`endif
     localparam RS_BIT = 3;
-    localparam PADDR_L = 5;
-    localparam ROBADDR_L = 5;
+`ifdef OOO_WIN_BITS
+    localparam PADDR_L = `OOO_WIN_BITS;       // experiment: ROB and rename buffer size
+    localparam ROBADDR_L = `OOO_WIN_BITS;
+`else
+    localparam PADDR_L = 6;                     // 64-entry rename buffer
+    localparam ROBADDR_L = 6;                   // 64-entry ROB
+`endif
+`ifdef OOO_MUL_UNITS
+    localparam MUL_UNITS = `OOO_MUL_UNITS;   // sequential multipliers in parallel
+`else
+    localparam MUL_UNITS = 3;
+`endif
     localparam PRF_SIZE = 2 ** PADDR_L;
     localparam MEM_INDEX = $clog2(MEM_DEPTH);
 
-    localparam PHT_ADDR_L = 8;
+`ifdef OOO_PHT_BITS
+    localparam PHT_ADDR_L = `OOO_PHT_BITS;  // experiment (simulation only: the SRAM model is resized)
+`else
+    localparam PHT_ADDR_L = 12;                 // 4096-entry gshare table, 12-bit history
+`endif
     localparam FTQ_DEPTH = 16;
     localparam RAS_HEIGHT = 8;
     localparam RAS_ADDR_L = $clog2(RAS_HEIGHT);
@@ -224,6 +251,8 @@ import rv32i_types::*;
     rvfi_entry rvfi_entry_load_in,   rvfi_entry_load_out;
     rvfi_entry rvfi_entry_cdb_reg_1, rvfi_entry_cdb_reg_2;
     rvfi_entry rvfi_entry_commit_1,  rvfi_entry_commit_2;
+    rvfi_entry rvfi_entry_commit_rob_1;
+    logic [31:0] store_commit_wdata, store_commit_rdata;   // the store committing now
 
     logic  debug_cg;
     logic stall_id_prf_out_1, stall_id_prf_out_2, decode_stall;
@@ -324,6 +353,15 @@ import rv32i_types::*;
                 RS_mem_out            <= RS_mem_out_next;
                 rvfi_entry_rs_mem_reg <= rvfi_entry_rs_mem;
                 RS_mem_out_valid      <= RS_mem_out_valid_next;
+            end else if (RS_mem_out_valid && RS_mem_out.rs2_use && !RS_mem_out.rs2_valid) begin
+                // a store waiting here (queue full / CDB busy) keeps watching for its data
+                if (cdb_main_1.valid && cdb_main_1.regf_we && cdb_main_1.rd_paddr == RS_mem_out.rs2_paddr) begin
+                    RS_mem_out.rs2_valid <= 1'b1;
+                    RS_mem_out.rs2_data  <= cdb_main_1.rd_data;
+                end else if (cdb_main_2.valid && cdb_main_2.regf_we && cdb_main_2.rd_paddr == RS_mem_out.rs2_paddr) begin
+                    RS_mem_out.rs2_valid <= 1'b1;
+                    RS_mem_out.rs2_data  <= cdb_main_2.rd_data;
+                end
             end
 
             if (func_br_ready) begin             
@@ -335,61 +373,81 @@ import rv32i_types::*;
     end
 
 
-    prefechter_nl prefechter_nl(
-        .clk(clk),
-        .rst(rst),
-        .flush(flush || flush_ufp),
+    // Fetch talks to the I-cache directly: the line buffer's next-line prefetch
+    // replaces prefechter_nl (which only warmed the cache after a miss).
+    assign ufp_addr_o  = i_ufp_addr;
+    assign ufp_rmask_o = |i_ufp_rmask;
+    assign i_ufp_rdata = ufp_rdata_o;
+    assign i_ufp_resp  = ufp_resp_o;
 
-        .ufp_addr_i(i_ufp_addr),
-        .ufp_rmask_i(i_ufp_rmask),
-        .ufp_rdata_i(i_ufp_rdata),
-        .ufp_resp_i(i_ufp_resp),
-        .ufp_miss(ufp_miss),
 
-        .ufp_resp_o,
-        .ufp_rdata_o,
-        .ufp_rmask_o,
-        .ufp_addr_o
+    // instruction cache: 2 KB 4-way, 32 B line port, read-only, 32-line victim cache.
+    // Fetch keeps its request up through the response cycle -> ACCEPT_ON_RESP = 0.
+    pcache #(
+        .WAYS           (4),
+        .SETS           (`OOO_ICACHE_SETS),
+        .UFP_BYTES      (32),
+        .WRITABLE       (1'b0),
+        .VC_ENTRIES     (`PCACHE_VC_ENTRIES),
+        .ACCEPT_ON_RESP (1'b0)
+    ) i_cache (
+        .clk        (clk),
+        .rst        (rst),
+
+        .ufp_addr   (ufp_addr_o),
+        .ufp_rmask  ({32{ufp_rmask_o}}),
+        .ufp_wmask  ('0),
+        .ufp_wdata  ('0),
+        .ufp_id     (1'b0),
+        .ufp_rdata  (ufp_rdata_o),
+        .ufp_resp   (ufp_resp_o),
+        .ufp_raddr  (),
+        .ufp_rsp_id (),
+        .ufp_miss   (ufp_miss),
+
+        .dfp_addr   (dfp_addr_i),
+        .dfp_read   (dfp_read_i),
+        .dfp_write  (dfp_write_i),
+        .dfp_rdata  (dfp_rdata_i),
+        .dfp_wdata  (dfp_wdata_i),
+        .dfp_resp   (dfp_resp_i)
     );
 
+    // data cache: 2 KB 4-way write-back, word port, 32-line victim cache.
+    // The memory-queue controller presents its next access in the response cycle,
+    // so hits stream one per cycle (+define+OOO_DCACHE_NO_PIPE: one every two cycles).
+    pcache #(
+        .WAYS           (4),
+        .SETS           (16),
+        .UFP_BYTES      (4),
+        .WRITABLE       (1'b1),
+        .VC_ENTRIES     (`PCACHE_VC_ENTRIES),
+`ifdef OOO_DCACHE_NO_PIPE
+        .ACCEPT_ON_RESP (1'b0)
+`else
+        .ACCEPT_ON_RESP (1'b1)
+`endif
+    ) d_cache (
+        .clk        (clk),
+        .rst        (rst),
 
-    cache i_cache(
-        .clk(clk),
-        .rst(rst),
+        .ufp_addr   (d_ufp_addr),
+        .ufp_rmask  (d_ufp_rmask),
+        .ufp_wmask  (d_ufp_wmask),
+        .ufp_wdata  (d_ufp_wdata),
+        .ufp_id     (1'b0),
+        .ufp_rdata  (d_ufp_rdata),
+        .ufp_resp   (d_ufp_resp),
+        .ufp_raddr  (),
+        .ufp_rsp_id (),
+        .ufp_miss   (),
 
-        .ufp_addr(ufp_addr_o),
-        .ufp_rmask(ufp_rmask_o),
-        .ufp_rdata(ufp_rdata_o),
-        .ufp_resp(ufp_resp_o),
-        .ufp_miss(ufp_miss),
-
-        .dfp_addr(dfp_addr_i),
-        .dfp_read(dfp_read_i),
-        .dfp_write(dfp_write_i),
-        .dfp_rdata(dfp_rdata_i),
-        .dfp_wdata(dfp_wdata_i),
-        .dfp_resp(dfp_resp_i)
-    );
-
-    cache_d d_cache(
-        .clk(clk),
-        .rst(rst),
-
-        .ufp_addr(d_ufp_addr),
-        .ufp_rmask(d_ufp_rmask),
-        .ufp_wmask(d_ufp_wmask),
-        .ufp_rdata(d_ufp_rdata),
-        .ufp_wdata(d_ufp_wdata),
-        .ufp_resp(d_ufp_resp),
-
-        .dfp_addr(dfp_addr_d),
-        .dfp_read(dfp_read_d),
-        .dfp_write(dfp_write_d),
-        .dfp_rdata(dfp_rdata_d),
-        .dfp_wdata(dfp_wdata_d),
-        .dfp_resp(dfp_resp_d),
-
-        .d_cache_en(d_cache_en)
+        .dfp_addr   (dfp_addr_d),
+        .dfp_read   (dfp_read_d),
+        .dfp_write  (dfp_write_d),
+        .dfp_rdata  (dfp_rdata_d),
+        .dfp_wdata  (dfp_wdata_d),
+        .dfp_resp   (dfp_resp_d)
     );
 
     arbiter_pro arbiter(
@@ -445,6 +503,7 @@ import rv32i_types::*;
 
         .flush(flush),
         .rob_commit(rob_out_1),
+        .rob_commit_rd_data(rd_commit_data_1),
         .cdb(cdb_main_2),
 
         .flush_ufp,
@@ -776,9 +835,19 @@ import rv32i_types::*;
 
         .rvfi_entry_cdb_reg_1(rvfi_entry_cdb_reg_1),
         .rvfi_entry_cdb_reg_2(rvfi_entry_cdb_reg_2),
-        .rvfi_entry_commit_1(rvfi_entry_commit_1),
+        .rvfi_entry_commit_1(rvfi_entry_commit_rob_1),
         .rvfi_entry_commit_2(rvfi_entry_commit_2)
     );
+
+    // A store's RVFI record is written when its address is computed, possibly before
+    // its data arrived; at commit (lane 1 only) take the data from the store queue.
+    always_comb begin
+        rvfi_entry_commit_1 = rvfi_entry_commit_rob_1;
+        if (store_commit) begin
+            rvfi_entry_commit_1.mem_wdata = store_commit_wdata;
+            rvfi_entry_commit_1.rs2_rdata = store_commit_rdata;
+        end
+    end
 
     logic [63:0] total_branches, total_brs, total_jals, total_jalrs;
     logic [63:0] total_mispredicts, total_brs_mispredicts, total_jals_mispredicts, total_jalrs_mispredicts;
@@ -939,7 +1008,7 @@ import rv32i_types::*;
         .rvfi_entry_rs       (rvfi_entry_rs_mul)
     );    
 
-    func_mul func_mul_i(   
+    func_mul #(.NUM_MUL(MUL_UNITS)) func_mul_i(   
         .clk(clk),
         .rst(rst),
         .flush(flush),
@@ -1072,6 +1141,8 @@ import rv32i_types::*;
     store_entry_t   store_entry [MEM_DEPTH];
     logic [MEM_DEPTH-1 : 0] store_entry_valid;
     logic [MEM_INDEX-1 : 0] load_out_idx, load_deq_idx;
+    logic                   load_inflight, store_next_valid;
+    store_entry_t           store_next_dout;
     logic [MEM_INDEX:0]     store_head, store_tail;
 
     mem_queue_in_controller #(.MEM_DEPTH(MEM_DEPTH)) mem_queue_in_controller_i (
@@ -1080,6 +1151,8 @@ import rv32i_types::*;
 
         .cdb(st_cdb),
         .cdb_ready(st_cdb_rdy),
+        .cdb_1(cdb_main_1),
+        .cdb_2(cdb_main_2),
 
         .load_enq(load_enq),
         .store_enq(store_enq),
@@ -1113,6 +1186,9 @@ import rv32i_types::*;
         .store_head(store_head),
         .store_deq(store_deq),
 
+        .load_inflight(load_inflight),
+        .load_inflight_idx(load_deq_idx),
+
         .load_dout(load_dout),
         .load_out_valid(load_out_valid),
         .load_out_idx(load_out_idx),
@@ -1140,12 +1216,19 @@ import rv32i_types::*;
 
         .store_dout(store_dout),
         .store_out_valid(store_out_valid),
+        .store_next_dout(store_next_dout),
+        .store_next_valid(store_next_valid),
         .store_full(store_full),
 
         .store_all_commited(store_all_commited),
         .store_commit(store_commit),
 
-        .sq_mem_idle(sq_mem_idle)
+        .sq_mem_idle(sq_mem_idle),
+
+        .cdb_1(cdb_main_1),
+        .cdb_2(cdb_main_2),
+        .commit_wdata(store_commit_wdata),
+        .commit_rdata(store_commit_rdata)
     );
 
     mem_queue_out_controller #(.MEM_DEPTH(MEM_DEPTH), .MEM_INDEX(MEM_INDEX)) mem_queue_out_controller_i (
@@ -1159,9 +1242,12 @@ import rv32i_types::*;
 
         .load_out_valid(load_out_valid),
         .store_out_valid(store_out_valid),
+        .store_next_dout(store_next_dout),
+        .store_next_valid(store_next_valid),
 
         .load_deq(load_deq),
         .load_deq_idx(load_deq_idx),
+        .load_inflight(load_inflight),
         .store_deq(store_deq),
 
         .d_ufp_addr(d_ufp_addr),

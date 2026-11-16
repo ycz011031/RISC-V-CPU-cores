@@ -40,6 +40,15 @@ import rv32i_types::*;
     logic      [DEPTH-1:0]  entry_valid;
     assign rs_mem_idle = (entry_valid == '0);
 
+    // Only stores use rs2 here (their data). With STORE_SPLIT a store issues once its
+    // address operand is ready; its data follows into the store queue (see
+    // mem_queue_in_controller / store_queue), so younger loads are not held behind it.
+`ifdef OOO_NO_STORE_SPLIT
+    localparam bit STORE_SPLIT = 1'b0;
+`else
+    localparam bit STORE_SPLIT = 1'b1;
+`endif
+
     logic   [RS_BIT : 0]   head, tail;
     logic   [RS_BIT : 0]   head_next, tail_next;
 
@@ -67,7 +76,7 @@ import rv32i_types::*;
             rs2_cdb2_forwarding[i] = RS_entry[i].rs2_use && !RS_entry[i].rs2_valid && cdb_2.valid && RS_entry[i].rs2_paddr == cdb_2.rd_paddr && cdb_2.regf_we;
         end
         if (entry_valid[head[RS_BIT-1:0]]) begin
-            if ((!RS_entry[head[RS_BIT-1:0]].rs1_use || RS_entry[head[RS_BIT-1:0]].rs1_valid || rs1_cdb1_forwarding[head[RS_BIT-1:0]] || rs1_cdb2_forwarding[head[RS_BIT-1:0]]) && (!RS_entry[head[RS_BIT-1:0]].rs2_use || RS_entry[head[RS_BIT-1:0]].rs2_valid || rs2_cdb1_forwarding[head[RS_BIT-1:0]] || rs2_cdb2_forwarding[head[RS_BIT-1:0]])) begin
+            if ((!RS_entry[head[RS_BIT-1:0]].rs1_use || RS_entry[head[RS_BIT-1:0]].rs1_valid || rs1_cdb1_forwarding[head[RS_BIT-1:0]] || rs1_cdb2_forwarding[head[RS_BIT-1:0]]) && (STORE_SPLIT || !RS_entry[head[RS_BIT-1:0]].rs2_use || RS_entry[head[RS_BIT-1:0]].rs2_valid || rs2_cdb1_forwarding[head[RS_BIT-1:0]] || rs2_cdb2_forwarding[head[RS_BIT-1:0]])) begin
                 RS_out_valid  = 1'b1;
                 RS_entry_out  =  RS_entry[head[RS_BIT-1:0]];
                 rvfi_entry_rs =  rvfi_entry_reg[head[RS_BIT-1:0]];

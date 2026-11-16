@@ -2,6 +2,6 @@
     "num_rw_ports": 2,
     "word_size"   : 2,
     "write_size"  : 2,
-    "num_words"   : 256,
+    "num_words"   : 4096,
     "random_init" : false
 }

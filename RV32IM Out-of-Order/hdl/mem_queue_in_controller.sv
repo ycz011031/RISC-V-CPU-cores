@@ -8,6 +8,7 @@ import rv32i_types::*;
 
     output  CDB_t           cdb,
     input   logic           cdb_ready,
+    input   CDB_t           cdb_1, cdb_2,       // store data may still be in flight
 
     output  logic           load_enq,
     output  logic           store_enq,
@@ -31,6 +32,19 @@ import rv32i_types::*;
     logic [31:0] mem_wdata;
     logic [3:0] mem_wmask, mem_rmask;
     logic [2:0] mem_op;
+
+    // A store enters the store queue as soon as its address is known. Its data
+    // comes with it when ready (or on a CDB this cycle); otherwise the store-queue
+    // entry picks it up from the CDB later. Stores only write at commit, and the
+    // data's producer is older, so the data is always there by then.
+    logic        d_cdb1, d_cdb2, d_ok;
+    logic [31:0] d_val;
+    always_comb begin
+        d_cdb1 = !RS_mem_out.rs2_valid && cdb_1.valid && cdb_1.regf_we && cdb_1.rd_paddr == RS_mem_out.rs2_paddr;
+        d_cdb2 = !RS_mem_out.rs2_valid && cdb_2.valid && cdb_2.regf_we && cdb_2.rd_paddr == RS_mem_out.rs2_paddr;
+        d_ok   = RS_mem_out.rs2_valid || d_cdb1 || d_cdb2;
+        d_val  = d_cdb1 ? cdb_1.rd_data : (d_cdb2 ? cdb_2.rd_data : RS_mem_out.rs2_data);
+    end
 
     always_comb begin
         is_store = RS_mem_out.rs2_use;
@@ -61,13 +75,10 @@ import rv32i_types::*;
                 default:                    mem_wmask = '0;
             endcase
             store_din.mem_wmask       = mem_wmask;
-            unique case (mem_op)
-                store_f3_sb:                mem_wdata[8 *store_din.mem_addr[1:0] +: 8 ] = RS_mem_out.rs2_data[7 :0];
-                store_f3_sh:                mem_wdata[16*store_din.mem_addr[1]   +: 16] = RS_mem_out.rs2_data[15:0];
-                store_f3_sw:                mem_wdata = RS_mem_out.rs2_data;
-                default:                    mem_wdata = '0;
-            endcase
-            store_din.mem_wdata       = mem_wdata;
+            mem_wdata = d_ok ? store_wdata(mem_op, mem_wmask, d_val) : '0;
+            store_din.mem_wdata       = d_ok ? d_val : '0;          // raw register value
+            store_din.data_valid      = d_ok;
+            store_din.data_paddr      = RS_mem_out.rs2_paddr;
             store_din.mem_addr     = {store_din.mem_addr[31:2],2'b00};
             cdb.rd_paddr = '0;
             cdb.rd_data  = '0;
@@ -78,7 +89,8 @@ import rv32i_types::*;
             cdb.br_target ='0;
             rvfi_entry_store.mem_addr     = {store_din.mem_addr[31:2],2'b00};
             rvfi_entry_store.mem_wmask    = store_din.mem_wmask;
-            rvfi_entry_store.mem_wdata    = store_din.mem_wdata;
+            rvfi_entry_store.mem_wdata    = mem_wdata;          // fixed up at commit if the data came later
+            if (d_ok) rvfi_entry_store.rs2_rdata = d_val;
         end else begin
             func_ready = !load_full;
             load_enq = func_in_ready && func_ready;
@@ -106,7 +118,10 @@ import rv32i_types::*;
                 // end else begin
                 //     load_din.depend_idx[i] = '0;
                 // end
-                if (store_entry_valid[i] && store_entry[i].mem_addr == load_din.mem_addr) begin
+                // same word (store addresses are word aligned, a load's is its byte address)
+                // and at least one byte in common
+                if (store_entry_valid[i] && store_entry[i].mem_addr[31:2] == load_din.mem_addr[31:2]
+                    && (store_entry[i].mem_wmask & mem_rmask) != '0) begin
                     load_din.depend_idx[i] = '1;
                 end else begin
                     load_din.depend_idx[i] = '0;
